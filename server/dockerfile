@@ -26,12 +26,6 @@ ENV DATABASE_PASSWORD=${DATABASE_PASSWORD}
 ENV DATABASE_NAME=${DATABASE_NAME}
 ENV DATABASE_HOST=${DATABASE_HOST}
 
-# ENV PORT=4000
-# ENV JWT_SECRET=TheySayIAmOneTapGod
-# ENV NODE_ENV=production
-# ENV DATABASE_URL=postgres://postgres:Abcd12347635@test-db.cdtqpydz22c8.us-east-1.rds.amazonaws.com:5432/les-chat
-# docker run -d -e PORT=4000 -e JWT_SECRET=TheySayIAmOneTapGod -e NODE_ENV=production -e DATABASE_USERNAME=postgres -e DATABASE_PASSWORD=Abcd12347635 -e DATABASE_NAME=les-chat -e DATABASE_HOST=test-db.cdtqpydz22c8.us-east-1.rds.amazonaws.com  -p 4000:4000 --name les-chat-server b00977003/les-chat-server
-
 # RUN npm start
 
 
