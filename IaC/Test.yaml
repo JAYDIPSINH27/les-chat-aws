@@ -1,0 +1,368 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: CloudFormation template with Subnet, VPC, NAT Gateway, Internet Gateway, ALB, EC2, RDS PostgreSQL, Backup, CloudWatch, SNS and environment variable support.
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair for SSH access
+    Type: String
+    Default: mykey # Replace with your Key Pair name.
+  DBUsername:
+    Description: Master username for RDS
+    Type: String
+    Default: postgres
+  DBPassword:
+    Description: Master password for RDS
+    Type: String
+    NoEcho: true
+    Default: postgres
+  EmailAddress:
+    Description: Email address to receive notifications
+    Type: String
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # NAT Gateway
+  NATElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnet
+
+  # Subnets
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs ""]
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [0, !GetAZs ""]
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [1, !GetAZs ""]
+
+  # Route Tables
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  AlarmNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: CloudWatchAlarmNotifications
+
+  AlarmNotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref EmailAddress
+      TopicArn: !Ref AlarmNotificationTopic
+
+  # CloudWatch Alarm
+  CPUUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: HighCPUUsageAlarm
+      AlarmDescription: Alarm for high CPU utilization on the backend instance
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 10
+      EvaluationPeriods: 1
+      Threshold: 40
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref BackendInstance
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+      OKActions:
+        - !Ref AlarmNotificationTopic
+
+  # Security Groups
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP/HTTPS and SSH access to frontend
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # Change to a specific CIDR range for security
+
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from load balancer and SSH access
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # Change to a specific CIDR range for security
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP/HTTPS and SSH access to load balancer
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # Change to a specific CIDR range for security
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic from backend and SSH access to RDS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BackendSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0 # Change to a specific CIDR range for security
+
+  # Load Balancer
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+
+  LoadBalancerTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      Targets:
+        - Id: !Ref BackendInstance
+
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref LoadBalancerTargetGroup
+
+  # RDS
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: LesChatDataBase1
+      DBInstanceClass: db.t4g.micro
+      Engine: postgres
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: 20
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet
+        - !Ref PrivateSubnet2
+
+  # Instances
+  FrontendInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: LoadBalancer
+    Properties:
+      InstanceType: t2.small
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref FrontendSecurityGroup
+      SubnetId: !Ref PublicSubnet
+      ImageId: ami-0453ec754f44f9a4a
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo su
+          sudo dnf update -y
+          sudo dnf install -y docker
+          sudo systemctl start docker
+          sudo systemctl enable docker
+          docker pull b00977003/les-chat-client
+          docker run -d -p 80:3000 --name frontend-client \
+            -e REACT_APP_BACKEND_HTTP=http://${LoadBalancer.DNSName} \
+            -e REACT_APP_BACKEND_WS=ws://${LoadBalancer.DNSName}/graphql \
+            b00977003/les-chat-client          
+
+  BackendInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: RDSInstance
+    Properties:
+      InstanceType: t2.small
+      KeyName: !Ref KeyName
+      SecurityGroupIds:
+        - !Ref BackendSecurityGroup
+      SubnetId: !Ref PrivateSubnet
+      ImageId: ami-0453ec754f44f9a4a
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo su
+          sudo dnf update -y
+          sudo dnf install -y docker
+          sudo systemctl start docker
+          sudo systemctl enable docker        
+          docker pull b00977003/les-chat-server
+          docker run -d -p 80:4000 --name backend-server \
+            -e PORT=4000 \
+            -e NODE_ENV=production \
+            -e JWT_SECRET=TheySayIAmOneTapGod \
+            -e DATABASE_USERNAME=${DBUsername} \
+            -e DATABASE_PASSWORD=${DBPassword} \
+            -e DATABASE_NAME=les-chat \
+            -e DATABASE_HOST=${RDSInstance.Endpoint.Address} \
+            b00977003/les-chat-server
+
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: MyBackupVault
+
+  # AWS Backup Plan
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: MyBackupPlan
+        BackupPlanRule:
+          - RuleName: DailyBackupRule
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: cron(0 5 * * ? *) # Daily at 5 AM UTC
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle:
+              DeleteAfterDays: 30 # Retain backups for 30 days
+  # arn:aws:iam::567805460550:role/LabRole
+  # AWS Backup Selection
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: MyBackupSelection
+        IamRoleArn: arn:aws:iam::074606475557:role/aws-service-role/backup.amazonaws.com/AWSServiceRoleForBackup
+        Resources:
+          - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${RDSInstance.DBInstanceIdentifier}"
+
+Outputs:
+  FrontendPublicIP:
+    Description: Public IP of the frontend instance
+    Value: !GetAtt FrontendInstance.PublicIp
+
+  LoadBalancerDNS:
+    Description: Load balancer DNS
+    Value: !GetAtt LoadBalancer.DNSName
+
+  RDSHostname:
+    Description: RDS instance hostname
+    Value: !GetAtt RDSInstance.Endpoint.Address

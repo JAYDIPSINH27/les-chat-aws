@@ -1,6 +1,6 @@
 const backendUrls = {
-  http: 'https://leschatapp.herokuapp.com',
-  ws: 'wss://leschatapp.herokuapp.com/graphql',
+  http: process.env.REACT_APP_BACKEND_HTTP,
+  ws: process.env.REACT_APP_BACKEND_WS 
 };
 
 export default backendUrls;

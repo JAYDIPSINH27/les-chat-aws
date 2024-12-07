@@ -10,7 +10,7 @@ import { useMainPageStyles } from '../../styles/muiStyles';
 
 const Main = () => {
   const classes = useMainPageStyles();
-  const [tab, setTab] = useState('chat');
+  const [tab, setTab] = useState('users');
 
   return (
     <Container>

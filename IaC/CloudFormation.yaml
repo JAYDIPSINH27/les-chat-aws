@@ -1,0 +1,477 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Full-stack CloudFormation template for VPC, NAT Gateway, RDS, Load Balancer, Bastion Host, Auto Scaling Groups, and Target Groups.
+
+Parameters:
+  KeyName:
+    Type: String
+    Description: Name of an existing EC2 KeyPair to enable SSH access.
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    Description: EC2 instance type for backend and frontend.
+  BastionInstanceType:
+    Type: String
+    Default: t3.micro
+    Description: EC2 instance type for the bastion host.
+  DBUsername:
+    Type: String
+    Description: The database admin account username.
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: The database admin account password.
+
+Resources:
+  ##################################################
+  # VPC and Networking
+  ##################################################
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MyInternetGateway
+
+  AttachInternetGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: PrivateRouteTable
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway1
+
+  ##################################################
+  # Subnets
+  ##################################################
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: us-east-1a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: us-east-1b
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: PublicSubnet2
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: us-east-1a
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet1
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: us-east-1b
+      Tags:
+        - Key: Name
+          Value: PrivateSubnet2
+
+  RouteTableAssociationPublic1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref RouteTablePublic
+
+  RouteTableAssociationPublic2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref RouteTablePublic
+
+  RouteTableAssociationPrivate1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  RouteTableAssociationPrivate2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  ##################################################
+  # NAT Gateways
+  ##################################################
+  EIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  NATGateway1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIP1.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: NATGateway1
+
+  ##################################################
+  # Security Groups
+  ##################################################
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP, SSH, and app traffic
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 81
+          ToPort: 81
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 4000
+          ToPort: 4000
+          CidrIp: 0.0.0.0/0
+
+  ##################################################
+  # RDS Database
+  ##################################################
+  RDSSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+
+  RDSDBInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceClass: db.t3.micro
+      Engine: postgres
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: 20
+      DBSubnetGroupName: !Ref RDSSubnetGroup
+      MultiAZ: true
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !Ref SecurityGroup
+  
+  ##################################################
+  # RDS Ingress Rule
+  ##################################################
+  RDSIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroup # Security Group attached to the RDS instance
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId: !Ref SecurityGroup # Allow traffic from backend instances
+
+  ##################################################
+  # Bastion Host
+  ##################################################
+  BastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref BastionInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      ImageId: ami-0c02fb55956c7d316
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y git
+          yum install -y telnet
+
+  ##################################################
+  # Elastic Load Balancer and Target Groups
+  ##################################################
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+      SecurityGroups:
+        - !Ref SecurityGroup
+
+  FrontendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: FrontendTargetGroup
+      Protocol: HTTP
+      Port: 3000
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "3000"
+      HealthCheckPath: "/"
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+
+  BackendTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: BackendTargetGroup
+      Protocol: HTTP
+      Port: 4000
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "4000"
+      HealthCheckPath: "/"
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      UnhealthyThresholdCount: 3
+
+  LoadBalancerListenerFrontend:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendTargetGroup
+
+  LoadBalancerListenerBackend:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 81
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendTargetGroup
+
+  ##################################################
+  # Launch Templates and Auto Scaling Groups
+  ##################################################
+  BackendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    DependsOn: RDSDBInstance
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        ImageId: ami-0c02fb55956c7d316
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install docker -y
+            sudo systemctl start docker
+            sudo systemctl enable docker
+            docker pull b00977003/les-chat-server
+            docker run -d -p 4000:4000 --name backend-server \
+              -e PORT=4000 \
+              -e NODE_ENV=production \
+              -e JWT_SECRET=TheySayIAmOneTapGod \
+              -e DATABASE_USERNAME=${DBUsername} \
+              -e DATABASE_PASSWORD=${DBPassword} \
+              -e DATABASE_NAME=les-chat \
+              -e DATABASE_HOST=${RDSDBInstance.Endpoint.Address} \
+              b00977003/les-chat-server
+
+  FrontendLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref KeyName
+        SecurityGroupIds:
+          - !Ref SecurityGroup
+        ImageId: ami-0c02fb55956c7d316
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            sudo yum update -y
+            sudo yum install docker -y
+            sudo systemctl start docker
+            sudo systemctl enable docker
+            docker pull b00977003/les-chat-client
+            docker run -d -p 3000:3000 --name frontend-client \
+              -e REACT_APP_BACKEND_HTTP=http://${LoadBalancer.DNSName}:81 \
+              -e REACT_APP_BACKEND_WS=ws://${LoadBalancer.DNSName}:81/graphql \
+              b00977003/les-chat-client
+
+  BackendAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn: RDSDBInstance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref BackendLaunchTemplate
+        Version: !GetAtt BackendLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      TargetGroupARNs:
+        - !Ref BackendTargetGroup
+
+  FrontendAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref FrontendLaunchTemplate
+        Version: !GetAtt FrontendLaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 3
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      TargetGroupARNs:
+        - !Ref FrontendTargetGroup
+  
+  AlarmNotificationTopic:
+  Type: AWS::SNS::Topic
+  Properties:
+    TopicName: CloudWatchAlarmNotifications
+
+  AlarmNotificationSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref EmailAddress
+      TopicArn: !Ref AlarmNotificationTopic
+
+  # CloudWatch Alarm
+  CPUUtilizationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: HighCPUUsageAlarm
+      AlarmDescription: Alarm for high CPU utilization on the backend instance
+      MetricName: CPUUtilization
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: 10
+      EvaluationPeriods: 1
+      Threshold: 40
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref BackendInstance
+      AlarmActions:
+        - !Ref AlarmNotificationTopic
+      OKActions:
+        - !Ref AlarmNotificationTopic
+
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    Properties:
+      BackupVaultName: MyBackupVault
+
+  # AWS Backup Plan
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Properties:
+      BackupPlan:
+        BackupPlanName: MyBackupPlan
+        BackupPlanRule:
+          - RuleName: DailyBackupRule
+            TargetBackupVault: !Ref BackupVault
+            ScheduleExpression: cron(0 5 * * ? *) # Daily at 5 AM UTC
+            StartWindowMinutes: 60
+            CompletionWindowMinutes: 180
+            Lifecycle:
+              DeleteAfterDays: 30 # Retain backups for 30 days
+
+  # AWS Backup Selection
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: MyBackupSelection
+        IamRoleArn: arn:aws:iam::074606475557:role/LabRole
+        Resources:
+          - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${RDSInstance.DBInstanceIdentifier}"
+
+Outputs:
+  LoadBalancerFrontendURL:
+    Description: Load Balancer URL for the frontend
+    Value: !Sub "http://${LoadBalancer.DNSName}"
+
+  LoadBalancerBackendURL:
+    Description: Load Balancer URL for the backend
+    Value: !Sub "http://${LoadBalancer.DNSName}:81"
+
+  RDSHost:
+    Description: RDS Endpoint
+    Value: !GetAtt RDSDBInstance.Endpoint.Address

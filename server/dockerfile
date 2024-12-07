@@ -1,0 +1,38 @@
+# Stage 1: Build the React app
+FROM node:18-alpine
+
+# Set the working directory
+WORKDIR /app
+
+# Copy package.json
+COPY package.json ./
+
+# Install dependencies
+RUN npm install -g sequelize-cli
+RUN npm install
+RUN npm update
+
+# Copy the rest of the application code
+COPY . .
+
+
+# Set environment variables
+
+ENV PORT=${PORT}
+ENV JWT_SECRET = ${JWT_SECRET}
+ENV NODE_ENV = ${NODE_ENV}
+ENV DATABASE_USERNAME=${DATABASE_USERNAME}
+ENV DATABASE_PASSWORD=${DATABASE_PASSWORD}
+ENV DATABASE_NAME=${DATABASE_NAME}
+ENV DATABASE_HOST=${DATABASE_HOST}
+
+# ENV PORT=4000
+# ENV JWT_SECRET=TheySayIAmOneTapGod
+# ENV NODE_ENV=production
+# ENV DATABASE_URL=postgres://postgres:Abcd12347635@test-db.cdtqpydz22c8.us-east-1.rds.amazonaws.com:5432/les-chat
+# docker run -d -e PORT=4000 -e JWT_SECRET=TheySayIAmOneTapGod -e NODE_ENV=production -e DATABASE_USERNAME=postgres -e DATABASE_PASSWORD=Abcd12347635 -e DATABASE_NAME=les-chat -e DATABASE_HOST=test-db.cdtqpydz22c8.us-east-1.rds.amazonaws.com  -p 4000:4000 --name les-chat-server b00977003/les-chat-server
+
+# RUN npm start
+
+
+CMD ["sh", "-c", "npx sequelize db:migrate && npm start"]
