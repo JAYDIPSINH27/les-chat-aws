@@ -7,11 +7,15 @@ Parameters:
     Description: Name of an existing EC2 KeyPair to enable SSH access.
   InstanceType:
     Type: String
-    Default: t3.micro
+    Default: t2.micro
+    Description: EC2 instance type for backend and frontend.
+  FrontendInstanceType:
+    Type: String
+    Default: t2.medium
     Description: EC2 instance type for backend and frontend.
   BastionInstanceType:
     Type: String
-    Default: t3.micro
+    Default: t2.micro
     Description: EC2 instance type for the bastion host.
   DBUsername:
     Type: String
@@ -385,7 +389,7 @@ Resources:
     Type: AWS::EC2::LaunchTemplate
     Properties:
       LaunchTemplateData:
-        InstanceType: !Ref InstanceType
+        InstanceType: !Ref FrontendInstanceType
         KeyName: !Ref KeyName
         SecurityGroupIds:
           - !Ref FrontendSecurityGroup
@@ -447,23 +451,23 @@ Resources:
       Endpoint: !Ref EmailAddress
       TopicArn: !Ref AlarmNotificationTopic
 
-  CPUUtilizationAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: HighCPUUsageAlarm
-      AlarmDescription: Alarm for high CPU utilization on the backend instance
-      MetricName: CPUUtilization
-      Namespace: AWS/EC2
-      Statistic: Average
-      Period: 10
-      EvaluationPeriods: 1
-      Threshold: 40
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: AutoScalingGroupName
-          Value: !Ref BackendAutoScalingGroup
-      AlarmActions:
-        - !Ref AlarmNotificationTopic
+  # CPUUtilizationAlarm:
+  #   Type: AWS::CloudWatch::Alarm
+  #   Properties:
+  #     AlarmName: HighCPUUsageAlarm
+  #     AlarmDescription: Alarm for high CPU utilization on the backend instance
+  #     MetricName: CPUUtilization
+  #     Namespace: AWS/EC2
+  #     Statistic: Average
+  #     Period: 10
+  #     EvaluationPeriods: 1
+  #     Threshold: 40
+  #     ComparisonOperator: GreaterThanOrEqualToThreshold
+  #     Dimensions:
+  #       - Name: AutoScalingGroupName
+  #         Value: !Ref BackendAutoScalingGroup
+  #     AlarmActions:
+  #       - !Ref AlarmNotificationTopic
 
   ##################################################
   # Backup Configuration
@@ -481,11 +485,11 @@ Resources:
         BackupPlanRule:
           - RuleName: DailyBackupRule
             TargetBackupVault: !Ref BackupVault
-            ScheduleExpression: cron(0 5 * * ? *) # Daily at 5 AM UTC
+            ScheduleExpression: cron(0 5 * * ? *) 
             StartWindowMinutes: 60
             CompletionWindowMinutes: 180
             Lifecycle:
-              DeleteAfterDays: 30 # Retain backups for 30 days
+              DeleteAfterDays: 30 
 
   BackupSelection:
     Type: AWS::Backup::BackupSelection
@@ -496,6 +500,147 @@ Resources:
         IamRoleArn: arn:aws:iam::074606475557:role/LabRole
         Resources:
           - !Sub "arn:aws:rds:${AWS::Region}:${AWS::AccountId}:db:${RDSDBInstance}"
+
+  ##################################################
+  # CloudWatch Alarms for Frontend Scaling
+  ##################################################
+  FrontendHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm if Frontend CPU > 60%"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref FrontendAutoScalingGroup
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 60
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref FrontendScaleOutPolicy
+      OKActions:
+        - !Ref AlarmNotificationTopic
+      InsufficientDataActions:
+        - !Ref AlarmNotificationTopic
+
+  FrontendLowCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm if Frontend CPU < 20%"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref FrontendAutoScalingGroup
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 20
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref FrontendScaleInPolicy
+      OKActions:
+        - !Ref AlarmNotificationTopic
+      InsufficientDataActions:
+        - !Ref AlarmNotificationTopic
+
+  ##################################################
+  # Step Scaling Policies for Frontend ASG
+  ##################################################
+  FrontendScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref FrontendAutoScalingGroup
+      PolicyType: StepScaling
+      AdjustmentType: ChangeInCapacity
+      StepAdjustments:
+        - MetricIntervalLowerBound: 0
+          ScalingAdjustment: 1
+      Cooldown: 300
+
+  FrontendScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref FrontendAutoScalingGroup
+      PolicyType: StepScaling
+      AdjustmentType: ChangeInCapacity
+      StepAdjustments:
+        - MetricIntervalUpperBound: 0
+          ScalingAdjustment: -1
+      Cooldown: 300
+
+  ##################################################
+  # CloudWatch Alarms for Backend Scaling
+  ##################################################
+  BackendHighCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm if Backend CPU > 60%"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref BackendAutoScalingGroup
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 60
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref BackendScaleOutPolicy
+      OKActions:
+        - !Ref AlarmNotificationTopic
+      InsufficientDataActions:
+        - !Ref AlarmNotificationTopic
+
+  BackendLowCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: "Alarm if Backend CPU < 20%"
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: AutoScalingGroupName
+          Value: !Ref BackendAutoScalingGroup
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 20
+      ComparisonOperator: LessThanThreshold
+      AlarmActions:
+        - !Ref BackendScaleInPolicy
+      OKActions:
+        - !Ref AlarmNotificationTopic
+      InsufficientDataActions:
+        - !Ref AlarmNotificationTopic
+
+  ##################################################
+  # Step Scaling Policies for Backend ASG
+  ##################################################
+  BackendScaleOutPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref BackendAutoScalingGroup
+      PolicyType: StepScaling
+      AdjustmentType: ChangeInCapacity
+      StepAdjustments:
+        - MetricIntervalLowerBound: 0
+          ScalingAdjustment: 1
+      Cooldown: 300
+
+  BackendScaleInPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AutoScalingGroupName: !Ref BackendAutoScalingGroup
+      PolicyType: StepScaling
+      AdjustmentType: ChangeInCapacity
+      StepAdjustments:
+        - MetricIntervalUpperBound: 0
+          ScalingAdjustment: -1
+      Cooldown: 300
+
 
 Outputs:
   LoadBalancerFrontendURL:
